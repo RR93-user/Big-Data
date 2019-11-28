@@ -1,0 +1,356 @@
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar; --Prequisite code for running SQL like queries
+----------------------------------Creating the external table ----------------------------------------------------
+drop table nyc_cabtrip_data_rr93
+create external table if not exists NYC_cabtrip_data_rr93(VendorID int,tpep_pickup_datetime timestamp, tpep_dropoff_datetime timestamp,
+passenger_count	int, trip_distance double, RatecodeID int, store_and_fwd_flag string, PULocationID int, DOLocationID int,
+payment_type int, fare_amount double, extra double,	mta_tax double,	tip_amount double, tolls_amount double, 
+improvement_surcharge double, total_amount double) 
+row format delimited fields terminated by ','
+location '/common_folder/nyc_taxi_data/'
+tblproperties ("skip.header.line.count"="1");
+
+select * from nyc_cabtrip_data_rr93
+
+------------------------------------------Basic Data Quality Checks--------------------------------------------
+--The result of below query yields results that shows 1= Creative Mobile Technologies,LLC has provided 527386 no. of records,and
+-- 2= VeriFone Inc has provided 647183 no. of records
+select vendorid, count(*) as no_of_records from nyc_cabtrip_data_rr93
+group by vendorid
+order by vendorid;
+
+--Checking if the data provided is for months November and December only.
+
+select tpep_dropoff_datetime, tpep_pickup_datetime,vendorid from nyc_cabtrip_data_rr93
+order by tpep_dropoff_datetime desc;
+select tpep_dropoff_datetime, tpep_pickup_datetime,vendorid from nyc_cabtrip_data_rr93
+order by tpep_pickup_datetime asc;
+--As you can see the dataset contains data of January 2003, December 2008,January 2009 and October 2017  apart from November,December 2017 and January 2018
+--provided by vendorid 2= VeriFone Inc. and a drop of date contains year as 2019 with pick up year 2017 by vendorid 1= Creative Mobile Technologies,LLC
+
+select distinct passenger_count, vendorid from nyc_cabtrip_data_rr93
+order by vendorid;
+-- Even though the passenger_count is a driver enetered value,result of above query shows that there are values such 0,7,8,9
+-- now without any passenger there is no trip and according to the law a new york yellow taxi cab cannot take more than 6 passenger,hence 7,8,9 are not acceptable.
+
+--Checking which vendor has provided inconsistent data and how much.
+select count(passenger_count)as faulty_passenger_count , vendorid from nyc_cabtrip_data_rr93
+where (passenger_count==0 and pulocationid!=dolocationid) or passenger_count==7 or passenger_count==8 or passenger_count==9 
+group by vendorid
+order by vendorid;
+--As you can see the result of above query shows that 5819 records provided by vendorid 1= Creative Mobile Technologies,LLC
+--and only 18 records provided by vendorid 2= VeriFone Inc.
+
+--checking inconsistencies in trip distances--
+select count(trip_distance) from nyc_cabtrip_data_rr93 
+where trip_distance==0 and pulocationid!=dolocationid;
+--We can see that in the result of above we have as many as 2352 records with trip distances 0
+
+--Now, if the pulocationid and dolocationid are the same i.e qual then the record is correct and if they aren't equal 
+--then the records are faulty
+--Query for no of faulty trip distance i.e to count the no. of records pulocationid not equal to dolocationid
+select count(trip_distance) as count_faulty_trip_distance, vendorid from nyc_cabtrip_data_rr93
+where trip_distance==0 and pulocationid!=dolocationid
+group by vendorid
+order by vendorid;
+--The result of the above query shows that we have 1259 faulty records of trip distance provided by 
+--vendorid 1= Creative Mobile Technologies,LLC and 1093 records provided by vendorid 2= VeriFone Inc.
+
+--Checking inconsistencies in ratecodeid--
+select distinct ratecodeid from nyc_cabtrip_data_rr93;
+
+select count(ratecodeid) as count_faulty_ratecodeid,vendorid from nyc_cabtrip_data_rr93
+where ratecodeid==99
+group by vendorid
+order by vendorid;
+--The result of the above query shows that we have 8 faulty records of ratecodeid provided by vendorid 1= Creative Mobile Technologies,LLC
+--and only 1 record provided by vendorid 2= VeriFone Inc.
+
+--Checking inconsistencies in store_and_fwd_flag-- 
+select distinct store_and_fwd_flag from nyc_cabtrip_data_rr93;
+--No inconsistencies in store_and_fwd_flag  
+
+--Checking inconsistencies in payment_type-- 
+select distinct payment_type from nyc_cabtrip_data_rr93;
+--The result of the above query shows that there are no records with payment type 5= Unknown or 6= Voided trip
+--however this doesn't indicate fault or error
+ 
+--Checking inconsistencies in fare_amount-- 
+select distinct fare_amount, vendorid from nyc_cabtrip_data_rr93;
+--We have negative values in fare amount which is not possible 
+select count(fare_amount) as faulty_fare_amount, vendorid from nyc_cabtrip_data_rr93
+where fare_amount < 0 or (fare_amount=0 and  pulocationid!=dolocationid) 
+group by vendorid
+order by vendorid;
+--The result of the above query shows that we have 586 faulty fare amount record provided 
+--by vendorid 2= VeriFone Inc. and 127 records by 1= Creative Mobile Technologies,LLC
+--The result of above query shows that we have 91 records by 1= Creative Mobile Technologies,LLC and 28 records by 2= VeriFone Inc.
+--  which has fare amount as 0 but trip distance not equal to 0,also payement type was neither  3= No charge nor 4= Dispute
+
+--Checking inconsistencies in extra-- 
+select distinct extra, vendorid from nyc_cabtrip_data_rr93
+where payment_type!=3 and payment_type!=4;
+--Here we can we can see in the result of above query that there are amounts other than $0.5 and $1 which should not be present also negative values which is not possible
+
+--Now we count the no. of records of negative values values by vendorid
+select count(extra) as count_faulty_extra,vendorid from nyc_cabtrip_data_rr93
+where extra<0
+group by vendorid
+order by vendorid;
+--The result of the above query shows that we have 285 negative values provided by 2= VeriFone Inc.and only 1 negative value by 1= Creative Mobile Technologies,LLC
+
+--Now we count the no. of records of inconsistent values in extra by vendorid
+select count(extra) as count_faulty_extra,vendorid from nyc_cabtrip_data_rr93
+where extra!=0.5 and extra!=1 and extra>0
+group by vendorid
+order by vendorid;
+--The result of the above query shows that we have 1822 faulty records of extra  provided by 
+--vendorid 1= Creative Mobile Technologies,LLC and 2748 records provided by vendorid 2= VeriFone Inc.
+
+--Checking inconsistencies in  mta_tax-- 
+select distinct mta_tax, vendorid from nyc_cabtrip_data_rr93;
+--We can see that mta_tax other values other than 0.5 and negative values which are not possible
+
+--Now we count the no. of records of negative values of mta_tax by vendorid
+select count(mta_tax) as count_negative_mta_tax,vendorid from nyc_cabtrip_data_rr93
+where mta_tax <0 
+group by vendorid
+order by vendorid;
+--The result of the above query shows that we have 544 negative values provided by 2= VeriFone Inc.
+
+--Now we count the no. of records of inconsistent values of mta_tax by vendorid
+select count(mta_tax) as count_faulty_mta_tax,vendorid from nyc_cabtrip_data_rr93
+where mta_tax >0.5  or (mta_tax=0 and pulocationid!=dolocationid) 
+group by vendorid
+order by vendorid;
+--The result of the above query shows that we have 1772 faulty records of extra  provided by 
+--vendorid 1= Creative Mobile Technologies,LLC and 	1978 records provided by vendorid 2= VeriFone Inc.
+
+--Checking inconsistencies in improvement_surcharge-
+select distinct improvement_surcharge from nyc_cabtrip_data_rr93;
+
+--Now we count the no. of faulty records in improvement surcharges by vendorid
+select count(improvement_surcharge) as faulty_improvement_surcharge, vendorid from nyc_cabtrip_data_rr93
+where improvement_surcharge < 0 or (improvement_surcharge=0 and  pulocationid!=dolocationid) and(payment_type!=3 and payment_type!=4)
+group by vendorid
+sort by vendorid;
+--The result of the above query shows we have 697 faulty faulty records of extra  provided by 2= VeriFone Inc.
+--49 faulty records of extra  provided by vendorid 1= Creative Mobile Technologies,LLC
+
+--Checking inconsistencies in tip_amount-- 
+select distinct tip_amount, vendorid, payment_type from nyc_cabtrip_data_rr93 order by tip_amount asc;
+--As we can see from the result of the above query there are 4 negative record provided by vendorid 2= VeriFone Inc.
+--amount which is not possible
+
+--Checking inconsistencies in tolls_amount--
+select tolls_amount, vendorid from nyc_cabtrip_data_rr93 order by tolls_amount asc;
+--We can see the result of above query shows 3 negative values provided by vendorid 2= VeriFone Inc.
+ 
+--Checking inconsistencies in total_amount--
+select distinct total_amount from nyc_cabtrip_data_rr93 order by total_amount asc;
+--The result of the above query shows negative values which are not possible
+
+--Now we count the no.of faulty total amount records
+select count(total_amount) as count_faulty_total_amount, vendorid from nyc_cabtrip_data_rr93 
+where total_amount < 0 or (total_amount=0 and  pulocationid!=dolocationid)
+group by vendorid
+order by vendorid;
+--The result of above query shoes that we have 586 no.of faulty records provided by vendorid 2= VeriFone Inc.
+--and 39 faulty records by vendorid 1= Creative Mobile Technologies,LLC
+
+------------------PARTITIONING THE DATA IN ORC FORMAT--------------------------
+--Prequisite code mandatory before partitionong
+SET hive.exec.max.dynamic.partitions=100000;
+SET hive.exec.max.dynamic.partitions.pernode=100000;
+
+
+create external table if not exists nyc_cabtrip_data_rr93_year_month_partitioned_orc
+(VendorID int,tpep_pickup_datetime timestamp, tpep_dropoff_datetime timestamp,
+passenger_count	int, trip_distance double, RatecodeID int, store_and_fwd_flag string, PULocationID int, DOLocationID int,
+payment_type int, fare_amount double, extra double,	mta_tax double,	tip_amount double, tolls_amount double, 
+improvement_surcharge double, total_amount double) partitioned by (yr int, mnth int)
+stored as orc location '/user/rohit.rajagopal93_gmail/nyc_cabtrip_data_rr93_year_month_partitioned'
+tblproperties ("orc.compress"="SNAPPY");
+
+
+insert overwrite table nyc_cabtrip_data_rr93_year_month_partitioned_orc partition(yr, mnth)
+select vendorid, tpep_pickup_datetime, tpep_dropoff_datetime, passenger_count, trip_distance, ratecodeid, 
+store_and_fwd_flag, pulocationid, dolocationid, payment_type, fare_amount, extra, mta_tax, tip_amount, tolls_amount, 
+improvement_surcharge, total_amount, year(from_unixtime(unix_timestamp(tpep_pickup_datetime))) as yr,
+month(from_unixtime(unix_timestamp(tpep_pickup_datetime))) as mnth 
+from  nyc_cabtrip_data_rr93
+where (
+     (passenger_count!=0 or pulocationid=dolocationid) and passenger_count!=7 and passenger_count!=8 and passenger_count!=9
+     and 
+     trip_distance!=0 or pulocationid=dolocationid
+     and
+     ratecodeid!=99
+     and 
+     (fare_amount > 0 or (fare_amount=0 and pulocationid=dolocationid))
+     and
+     (extra=0.5 or extra=1 or extra=0)
+     and
+     (mta_tax=0.5 or (mta_tax=0 and pulocationid=dolocationid))
+     and
+     (tip_amount>=0)
+     and 
+     (tolls_amount>=0)
+     and
+     (improvement_surcharge=0.3 or (improvement_surcharge=0 and pulocationid=dolocationid))
+     and
+     (total_amount > 0 or (total_amount=0 and  pulocationid=dolocationid)));
+
+
+select * from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+
+select count(*) from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+
+----------------------Analysis- I--------------------------------
+--1 Comparing overall average fare for November & December 2017
+--Average fare November 
+select round(avg(fare_amount),2) as avg_fare_nov17 from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+where yr=2017 and mnth= 11;
+-----average fare for November 2017 is 13.08 
+--Average fare December
+select round(avg(fare_amount),2)as avg_fare_dec17 from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+where yr=2017 and mnth= 12;
+-----average fare for December 2017 is 12.87 
+
+--2 Exploring number of passengers per trip----
+select count(passenger_count) as passenger_count_per_trip, passenger_count from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+where yr=2017
+group by passenger_count
+order by passenger_count_per_trip desc;
+--With 825591 records of solo trips we can safely conclude that most people travel solo.
+
+--3 Finding out the most preferred mode of payment----------
+select count(payment_type) as count_mode_of_payment, payment_type from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+where yr=2017
+group by payment_type
+order by count_mode_of_payment desc;
+--With 785290 records of payement type 1= Credit card  we can safely conclude that it is the most most preferred mode of payment.
+
+--4 Finding average tip paid per trip, Comparing average with 25th, 50th, 75th percentiles
+--Average per trip
+select round(avg(tip_amount),2)as avg_tip_per_trip from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+where yr=2017;-- The average tip per trip is 1.85 
+
+select percentile_approx(tip_amount,0.25) as tip_25th_percentile, round(percentile_approx(tip_amount,0.50),2) as tip_50th_percentile,
+percentile_approx(tip_amount,0.75) as tip_75th_percentile from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+where yr=2017;-- 25th percentile is 0, 50th percentile is 1.36,75th percentile is 2.45
+-- since the there is a difference of only 0.5 between average tip per trip and 50th percentile 
+--which is less than the difference  between average tip per trip and 75th percentile   
+--I'll say average tip is a representative statistic (of the central tendency) of ‘tip amount paid’.
+
+--5 Finding what fraction of total trips have an extra charge is levied
+---Trips levied with extra charge
+select count(extra) as extra_charge_trips from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+where extra=0.5 or extra=1 and yr=2017;
+---Trips levied with extra charge
+select count(extra) as extra_charge_trips from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+where yr=2017;
+---0.46 fraction of total trips have an extra charger levied
+-- for extra charger not levied and trip ditance not equal to 0
+select count(extra) as extra_charge_trips from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+where yr=2017 and pulocationid=dolocationid;
+--6.48
+
+-------------------------Analysis-II----------------------------------
+1--Findinf the correlation between no. of passenger and tip paid
+--Finding covariance
+ select covar_pop(passenger_count,tip_amount), passenger_count from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+ where yr=2017
+ group by passenger_count;
+--As you can see in the result of above query that the covariance is 0 so the correlation will be NaN
+--Correlation
+ select covar_pop(passenger_count,tip_amount), passenger_count from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+ where yr=2017
+ group by passenger_count;
+--As I mentioned earlier the correlation is going to be NaN
+
+--2 Segregating the data into five segments of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20
+create external table if not exists nyc_cabtrip_data_rr93_clustered_tip_amount
+(VendorID int,tpep_pickup_datetime timestamp, tpep_dropoff_datetime timestamp,
+passenger_count	int, trip_distance double, RatecodeID int, store_and_fwd_flag string, PULocationID int, DOLocationID int,
+payment_type int, fare_amount double, extra double,	mta_tax double,	tip_amount double, tolls_amount double, 
+improvement_surcharge double, total_amount double) partitioned by (yr int, mnth int)
+clustered by (tip_amount) into 5 buckets 
+stored as orc location '/user/rohit.rajagopal93_gmail/nyc_cabtrip_data_rr93_clustered_tip_amount'
+tblproperties ("orc.compress"="SNAPPY");
+
+
+insert overwrite table nyc_cabtrip_data_rr93_clustered_tip_amount partition(yr, mnth)
+select vendorid, tpep_pickup_datetime, tpep_dropoff_datetime, passenger_count, trip_distance, ratecodeid, 
+store_and_fwd_flag, pulocationid, dolocationid, payment_type, fare_amount, extra, mta_tax, tip_amount, tolls_amount, 
+improvement_surcharge, total_amount, year(from_unixtime(unix_timestamp(tpep_pickup_datetime))) as yr,
+month(from_unixtime(unix_timestamp(tpep_pickup_datetime))) as mnth 
+from  nyc_cabtrip_data_rr93_year_month_partitioned_orc
+where (
+     (passenger_count!=0 or pulocationid=dolocationid) and passenger_count!=7 and passenger_count!=8 and passenger_count!=9
+     and 
+     trip_distance!=0 or pulocationid=dolocationid
+     and
+     ratecodeid!=99
+     and 
+     (fare_amount > 0 or (fare_amount=0 and pulocationid=dolocationid))
+     and
+     (extra=0.5 or extra=1 or extra=0)
+     and
+     (mta_tax=0.5 or (mta_tax=0 and pulocationid=dolocationid))
+     and
+     (tip_amount>=0)
+     and 
+     (tolls_amount>=0)
+     and
+     (improvement_surcharge=0.3 or (improvement_surcharge=0 and pulocationid=dolocationid))
+     and
+     (total_amount > 0 or (total_amount=0 and  pulocationid=dolocationid)));
+     
+     select count(tip_amount) from nyc_cabtrip_data_rr93_clustered_tip_amount
+     where yr=2017;--1166176
+     
+     select count(tip_amount) from nyc_cabtrip_data_rr93_clustered_tip_amount
+     where yr=2017 and tip_amount between 0 and 5
+     --1083150 trips in 0 to 5 bucket, percentage share (1083150/1166176)*100 = 92.9% 
+     select count(tip_amount) from nyc_cabtrip_data_rr93_clustered_tip_amount
+     where yr=2017 and tip_amount between 5 and 10
+     --68781 trips in 5 to 10 bucket, percentage share (68781/1166176)*100= 5.9~6%
+     select count(tip_amount) from nyc_cabtrip_data_rr93_clustered_tip_amount
+     where yr=2017 and tip_amount between 10 and 15
+     --22285 trips in 10 to 15 bucket, percentage share (22285/1166176)*100= 1.91% 
+     select count(tip_amount) from nyc_cabtrip_data_rr93_clustered_tip_amount
+     where yr=2017 and tip_amount between 15 and 20
+     --2989 trips in 15 to 20 bucket, percentage share (2989/1166176)*100= 0.26%
+     select count(tip_amount) from nyc_cabtrip_data_rr93_clustered_tip_amount
+     where yr=2017 and tip_amount>20
+     --926 trips 20 and above, percentage share (926/1166176)*100= 0.08%
+     
+     --3 Which month has a greater average ‘speed’ - November or December?
+     select round(avg(unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime)),2) as average_speed_nov_2017
+     from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+     where yr=2017 and mnth=11;
+     --average speed for November 2017 is 1139.09
+     select round(avg(unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime)),2) as average_speed_dec_2017
+     from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+     where yr=2017 and mnth=12;
+     -- average speed for December 2017 is 1044.54
+     -- From the above results we can conclude that average speed for November 2017 is higher than December 2017
+     
+     --4 Analyse the average speed of the most happening days of the year, i.e. 31st December (New year’s eve) and 
+     --25th December (Christmas)
+     --Finding Average speed 25th December (Christmas)
+     select round(avg(unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime)),2) as average_speed_christmas
+     from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+     where yr=2017 and mnth= 12 and day(from_unixtime(unix_timestamp(tpep_pickup_datetime)))=25;
+     --The average speed fot christmas is 931.12
+     --Finding Average speed 31st December (New year’s eve)
+     select round(avg(unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime)),2) as average_speed_new_year_eve
+     from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+     where yr=2017 and mnth= 12 and day(from_unixtime(unix_timestamp(tpep_pickup_datetime)))=31;
+     --The Average speed 31st December (New year’s eve) is 860.78
+     --From the above results we can coclude that average speed for christmas is higher than new year's eve
+     --Overall average speed
+      select round(avg(unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime)),2) as average_speed_2017
+     from nyc_cabtrip_data_rr93_year_month_partitioned_orc
+     where yr=2017;
+     --Overall average speed is 1091.33 is higher than both Average speed 25th December (Christmas) 
+     --and 31st December (New year’s eve)
